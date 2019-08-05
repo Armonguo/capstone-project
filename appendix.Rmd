@@ -1,0 +1,1376 @@
+---
+title: "Appendix"
+author: "Yameng Guo"
+date: "01/08/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This appendix concludes all codes needed and explain each step.
+
+All package we need to use.
+```{r, eval=FALSE}
+library(readr)
+library(readxl)
+library(tidyverse)
+library(GISTools)
+library(sp)
+library(rgeos)
+library(tmap)
+library(tmaptools)
+library(spatstat)
+library (OpenStreetMap)
+library (rgdal)
+library(grid)
+```
+
+First of all, we need to read the data. the main data source is crime data and weather data. Besides, some map layers of lambeth are also need to be loaded.
+
+```{r,eval=FALSE}
+# -------------------------------------------
+# crime data
+crime = read_csv('/Users/armon/Documents/capstone project/
+                 version1/data/MPS_Borough_Level_Crime_Historic.csv')
+crime_lambeth <- crime[crime$Borough=="Lambeth",]
+crime_lambeth<- aggregate(crime_lambeth[,c(4:135)],
+                          by=list(category = crime_lambeth$`Major Category`),FUN = sum)
+
+crime_use <- data.frame(t(crime_lambeth))[2:133,]
+names(crime_use)<- crime_lambeth$category
+# convert to date 
+crime_use$date<-as.Date(paste0(rownames(crime_use),'01'),format = "%Y%m%d")
+# transfer to numberic
+for (i in 1:9) {
+  crime_use[,i]<-as.numeric(crime_use[,i])
+}
+
+#--------------------------------------
+# weather data
+
+weather <- read.table("/Users/armon/Documents/capstone project/
+                      version1/data/heathrowweather.txt",header = FALSE)
+names(weather)<- c('year','month','mmaxt' ,'mmint','frostday','rain(mm)','sunhours')
+
+weather$date<-as.Date(paste0(as.character(weather$year*100+weather$month),'01'),"%Y%m%d")
+
+
+#--------------------------------------
+# merge data
+crime_weather <- merge(crime_use,mobile,by.x = 'date',by.y = 'Date',all.x = TRUE)
+crime_weather<- merge(crime_weather,weather,by= 'date',all.x = TRUE)
+crime_weather<- merge(crime_weather,earning,by= 'year',all.x = TRUE)
+crime_weather<- merge(crime_weather,population,by.x= 'year',by.y='Year',all.x = TRUE)
+crime_weather<-crime_weather[,1:23]
+crime_weather<-crime_weather[,c(1:19,23)]
+```
+
+Another location data for crime to get the lsoa code. Then merge the weather data and crime data, to get the weather location data with average weather conditions.
+```{r,eval=FALSE}
+losacode<-read_csv('/Users/armon/Documents/capstone project/
+                   version1/data/london_crime_by_lsoa.csv')
+losacode<-losacode[losacode$borough=='Lambeth',]
+losacode_unique <- unique(losacode$lsoa_code)
+
+
+
+first_folder <-list.files('/Users/armon/Documents/capstone project/
+                          version1/data/crimelocation/', pattern=NULL, 
+                          all.files=FALSE,full.names=FALSE)
+
+location_file <-data.frame()
+
+for (ls in first_folder){
+  second_folder <- paste0('/Users/armon/Documents/capstone project/
+                          version1/data/crimelocation/',ls)
+  for (single_file in list.files(second_folder))
+    sinfile <- read_csv(paste0(second_folder,'/',single_file))
+    sinfile<-sinfile[sinfile$`LSOA code`%in%losacode_unique,][c(2,5:10)]
+    location_file<- rbind(location_file,sinfile)
+}
+
+unique(location_file$`Crime type`)
+crime_type <- c("Robbery","Theft from the person",
+                "Vehicle crime","Public order","Bicycle theft","Burglary")
+location_crime<-location_file[location_file$`Crime type` %in%crime_type,]
+
+location_crime$Date <- as.Date(paste0(location_crime$Month,'-01'))
+table(location_crime$Month)
+
+weather$key <- as.character(format(weather$date,'%Y-%m'))
+location_weather <- merge(location_crime,weather,by.x='Month',by.y='key',all.x = T)
+
+```
+
+Let us review the variables of data "location_weather".
+
+```{r}
+sometrans <- read.csv("location_weather")
+head(sometrans)
+```
+
+Then divide the weather location data into different type according to the weather features. Finally, eight types are created.
+```{r,eval=FALSE}
+hist(location_weather$sunhours)# 92quantile33 174.9quantile66
+
+summary(location_weather$`rain(mm)`)# 48.2
+
+hist(location_weather$frostday) # 5
+
+# type 1 :sun<92, rain<48.2, frost<5
+
+location_weather$type[which(location_weather$sunhours<92 &
+                              location_weather$`rain(mm)`<48.2 &
+                              location_weather$frostday<5)] <- 'type1'
+
+# type 2 :92<sun<174.9, rain<48.2, frost<5
+
+location_weather$type[which(location_weather$sunhours<174.9 &
+                              location_weather$sunhours>92 &
+                              location_weather$`rain(mm)`<48.2 &
+                              location_weather$frostday<5)] <- 'type2'
+
+# type 3 :174.9<sun, rain<48.2, frost<5
+
+location_weather$type[which(location_weather$sunhours>174.9 &
+                              location_weather$`rain(mm)`<48.2 &
+                              location_weather$frostday<5)] <- 'type3'
+
+# type 4 :sun<92, rain>48.2, frost<5
+
+location_weather$type[which(location_weather$sunhours<92 &
+                              location_weather$`rain(mm)`>48.2 &
+                              location_weather$frostday<5)] <- 'type4'
+
+
+# type 5 :sun<92, rain<48.2, frost>5
+
+location_weather$type[which(location_weather$sunhours<92 &
+                              location_weather$`rain(mm)`<48.2 &
+                              location_weather$frostday>5)] <- 'type5'
+
+
+# type 6 :92<sun<174.9, rain>48.2, frost<5
+
+location_weather$type[which(location_weather$sunhours<174.9 &
+                              location_weather$sunhours>92 &
+                              location_weather$`rain(mm)`>48.2 &
+                              location_weather$frostday<5)] <- 'type6'
+
+# type 7 :92<sun<174.9, rain<48.2, frost>5
+
+location_weather$type[which(location_weather$sunhours<174.9 &
+                              location_weather$sunhours>92 &
+                              location_weather$`rain(mm)`<48.2 &
+                              location_weather$frostday>5)] <- 'type7'
+
+# type 8 :92<sun<174.9, rain>48.2, frost>5
+
+location_weather$type[which(location_weather$sunhours<174.9 &
+                              location_weather$sunhours>92 &
+                              location_weather$`rain(mm)`>48.2 &
+                              location_weather$frostday>5)] <- 'type8'
+
+# type 9 :sun<92, rain>48.2, frost>5
+
+location_weather$type[which(location_weather$sunhours<92 &
+                              location_weather$`rain(mm)`>48.2 &
+                              location_weather$frostday>5)] <- 'type9'
+
+# type 10 :sun>174.9, rain>48.2, frost<5
+
+location_weather$type[which(location_weather$sunhours>174.9  &
+                              location_weather$`rain(mm)`>48.2 &
+                              location_weather$frostday<5)] <- 'type10'
+
+# type 11 :sun>174.9, rain<48.2, frost>5
+
+location_weather$type[which(location_weather$sunhours>174.9 & 
+                              location_weather$`rain(mm)`<48.2 &
+                              location_weather$frostday>5)] <- 'type11'
+
+# type 12 :sun>174.9, rain>48.2, frost>5
+
+location_weather$type[which(location_weather$sunhours>174.9 &
+                              location_weather$`rain(mm)`>48.2 &
+                              location_weather$frostday>5)] <- 'type12'
+
+table(location_weather$type)
+
+hist(location_weather$sunhours,main = "distribution of sunhours",
+     xlab="sunhour duration(monthly) ")# 92quantile33 174.9quantile66
+hist(location_weather$`rain(mm)`,main = "distribution of rainfall",
+     xlab="rainfall (monthly) ")
+hist(location_weather$frostday,main = "distribution of frostday",
+     xlab="frostday (monthly) ")
+
+summary(location_weather$`rain(mm)`)# 48.2
+quantile(location_weather$sunhours,0.66)
+
+hist(location_weather$frostday) # 5
+```
+
+After that, it is necessary to read the map layer of open spaces and parks inR and figure out the greenland the park's relationship with the crime distribution.
+```{r,eval=FALSE}
+
+parks_and_common <- readOGR(dsn = "/Users/armon/Documents/capstone project/
+                            version1/data/Parks_And_Open_Spaces", 
+                            layer = "Parks_And_Open_Spaces")
+
+lambeth_type1_graph<-spTransform(lambeth_type1,proj4string(parks_and_common))
+
+green1 <-   tm_shape(lambeth_type1_graph)
++tm_fill(col = 'prop'
+        ,breaks=c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf),
+         legend.show = FALSE) 
++tm_shape(parks_and_common)+tm_borders()+
+tm_layout("type 1:sun<92, rain<48.2, frost<5",
+          legend.title.size = 1,
+          legend.text.size = 1,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+lambeth_type2_graph<-spTransform(lambeth_type2,proj4string(parks_and_common))
+
+green2 <-  tm_shape(lambeth_type2_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) 
++ tm_shape(parks_and_common)+tm_borders()+
+tm_layout("type 2:92<sun<174.9, rain<48.2, frost<5",
+          legend.title.size = 1,
+          legend.text.size = 1,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+lambeth_type3_graph<-spTransform(lambeth_type3,proj4string(parks_and_common))
+
+green3 <-  tm_shape(lambeth_type3_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) 
++ tm_shape(parks_and_common)+tm_borders()+
+tm_layout("type 3 :174.9<sun, rain<48.2, frost<5",
+          legend.title.size = 1,
+          legend.text.size = 1,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+lambeth_type4_graph<-spTransform(lambeth_type4,proj4string(parks_and_common))
+
+green4 <- tm_shape(lambeth_type4_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) 
++ tm_shape(parks_and_common)+tm_borders()+
+tm_layout("type 4 :sun<92, rain>48.2, frost<5",
+          legend.title.size = 1,
+          legend.text.size = 1,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+lambeth_type5_graph<-spTransform(lambeth_type5,proj4string(parks_and_common))
+
+green5 <- tm_shape(lambeth_type5_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE)
++ tm_shape(parks_and_common)+tm_borders()+
+tm_layout("type 5 :sun<92, rain<48.2, frost>5",
+          legend.title.size = 1,
+          legend.text.size = 1,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+lambeth_type6_graph<-spTransform(lambeth_type6,proj4string(parks_and_common))
+
+green6 <-  tm_shape(lambeth_type6_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) 
++ tm_shape(parks_and_common)+tm_borders()+
+tm_layout("type 6 :92<sun<174.9, rain>48.2, frost<5",
+          legend.title.size = 1,
+          legend.text.size = 1,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+lambeth_type7_graph<-spTransform(lambeth_type9,proj4string(parks_and_common))
+
+green7 <- tm_shape(lambeth_type7_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) 
++ tm_shape(parks_and_common)
++tm_borders()+
+tm_layout("type 7 :sun<92, rain>48.2, frost>5",
+          legend.title.size = 1,
+          legend.text.size = 1,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+lambeth_type8_graph<-spTransform(lambeth_type9,proj4string(parks_and_common))
+
+green8 <- tm_shape(lambeth_type8_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE)
++ tm_shape(parks_and_common)+tm_borders()+
+tm_layout("type 8: sun>174.9, rain>48.2, frost<5",
+          legend.title.size = 1.5,
+          legend.text.size = 1.5,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+legend_green <- tm_shape(lambeth_type8_graph)
++tm_fill(col = 'prop',breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)) 
++ tm_shape(parks_and_common)
++tm_borders()+
+tm_layout("type 8: sun>174.9, rain>48.2, frost<5",
+          legend.title.size = 0.6,
+          legend.text.size = 0.5,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4,
+          legend.only = TRUE)
+
+
+library(grid)
+grid.newpage()
+pushViewport(viewport(layout=grid.layout(2,5)))
+print(green1, vp = viewport(layout.pos.col=1, layout.pos.row=1))
+print(green2, vp = viewport(layout.pos.col=2, layout.pos.row=1))
+print(green3, vp = viewport(layout.pos.col=3, layout.pos.row=1))
+print(green4, vp = viewport(layout.pos.col=4, layout.pos.row=1))
+print(legend_green, vp = viewport(layout.pos.col=5, layout.pos.row=1))
+print(green5, vp = viewport(layout.pos.col=1, layout.pos.row=2))
+print(green6, vp = viewport(layout.pos.col=2, layout.pos.row=2))
+print(green7, vp = viewport(layout.pos.col=3, layout.pos.row=2))
+print(green8, vp = viewport(layout.pos.col=4, layout.pos.row=2))
+
+```
+
+Next is the interplay of crime distribution with underground stations.
+
+```{r,eval=FALSE}
+# point graphs
+subway_station <- readOGR(dsn = "/Users/armon/Documents/capstone project
+                          /version1/data/Underground_Stations"
+                          , layer = "Underground_Stations")
+
+station1 <- tm_shape(lambeth_type1_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) 
++ tm_shape(subway_station)
++ tm_symbols(col = "black", scale = 1,alpha = 0)+
+tm_layout("type 1: sun<92, rain<48.2, frost<5",
+          legend.title.size = 1.5,
+          legend.text.size = 1.5,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+station2 <-  tm_shape(lambeth_type2_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) 
++ tm_shape(subway_station)
++ tm_symbols(col = "black", scale = 1,alpha = 0)+
+tm_layout("type 2:92<sun<174.9, rain<48.2, frost<5",
+          legend.title.size = 1.5,
+          legend.text.size = 1.5,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+station3 <-  tm_shape(lambeth_type3_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE)
++ tm_shape(subway_station)
++ tm_symbols(col = "black", scale = 1,alpha = 0)+
+tm_layout("type 3 :174.9<sun, rain<48.2, frost<5",
+          legend.title.size = 1.5,
+          legend.text.size = 1.5,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+station4 <-  tm_shape(lambeth_type4_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE)
++ tm_shape(subway_station)
++ tm_symbols(col = "black", scale = 1,alpha = 0)+
+tm_layout("type 4 :sun<92, rain>48.2, frost<5",
+          legend.title.size = 1.5,
+          legend.text.size = 1.5,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+station5 <-  tm_shape(lambeth_type5_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) 
++ tm_shape(subway_station)
++ tm_symbols(col = "black", scale = 1,alpha = 0)+
+tm_layout("type 5 :sun<92, rain<48.2, frost>5",
+          legend.title.size = 1.5,
+          legend.text.size = 1.5,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+station6 <-  tm_shape(lambeth_type6_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) 
++ tm_shape(subway_station)
++ tm_symbols(col = "black", scale = 1,alpha = 0)+
+tm_layout("type 6 :92<sun<174.9, rain>48.2, frost<5",
+          legend.title.size = 1.5,
+          legend.text.size = 1.5,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+
+station7 <-  tm_shape(lambeth_type7_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) 
++ tm_shape(subway_station)
++ tm_symbols(col = "black", scale = 1,alpha = 0)+
+tm_layout("type 7 :sun<92, rain>48.2, frost>5",
+          legend.title.size = 1.5,
+          legend.text.size = 1.5,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+station8 <-  tm_shape(lambeth_type8_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) 
++ tm_shape(subway_station)
++ tm_symbols(col = "black", scale = 1,alpha = 0)+
+tm_layout("type 8: sun>174.9, rain>48.2, frost<5",
+          legend.title.size = 1.5,
+          legend.text.size = 1.5,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+library(grid)
+grid.newpage()
+pushViewport(viewport(layout=grid.layout(2,5)))
+print(station1, vp = viewport(layout.pos.col=1, layout.pos.row=1))
+print(station2, vp = viewport(layout.pos.col=2, layout.pos.row=1))
+print(station3, vp = viewport(layout.pos.col=3, layout.pos.row=1))
+print(station4, vp = viewport(layout.pos.col=4, layout.pos.row=1))
+print(legend_green, vp = viewport(layout.pos.col=5, layout.pos.row=1))
+print(station5, vp = viewport(layout.pos.col=1, layout.pos.row=2))
+print(station6, vp = viewport(layout.pos.col=2, layout.pos.row=2))
+print(station7, vp = viewport(layout.pos.col=3, layout.pos.row=2))
+print(station8, vp = viewport(layout.pos.col=4, layout.pos.row=2))
+
+```
+
+Next is the interplay of crime distribution with Archaeological Priority Areas.
+
+```{r,eval=FALSE}
+Archaeological_Priority_Areas <- readOGR(dsn = "/Users/armon/Documents/capstone project/                                     version1/data/Archaeological_Priority_Areas"
+, layer = "Archaeological_Priority_Areas")
+
+Archaeological1<-tm_shape(lambeth_type1_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) 
++ tm_shape(Archaeological_Priority_Areas)+
+  tm_borders()+
+tm_layout("type 1:sun<92, rain<48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+Archaeological2 <-  tm_shape(lambeth_type2_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE)  
++tm_shape(Archaeological_Priority_Areas)+tm_borders()+
+tm_layout("type 2:92<sun<174.9, rain<48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+Archaeological3 <-   tm_shape(lambeth_type3_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) + tm_shape(Archaeological_Priority_Areas)+tm_borders()+
+tm_layout("type 3 :174.9<sun, rain<48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+Archaeological4 <-  tm_shape(lambeth_type4_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) + tm_shape(Archaeological_Priority_Areas)+tm_borders()+
+tm_layout("type 4 :sun<92, rain>48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+
+
+Archaeological5 <-  tm_shape(lambeth_type5_graph)
++tm_fill(col = 'prop',
+         breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf),
+         legend.show = FALSE) + tm_shape(Archaeological_Priority_Areas)+tm_borders()+
+tm_layout("type 5 :sun<92, rain<48.2, frost>5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+Archaeological6 <-  tm_shape(lambeth_type6_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) + tm_shape(Archaeological_Priority_Areas)+tm_borders()+
+tm_layout("type 6 :92<sun<174.9, rain>48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+
+Archaeological7 <-  tm_shape(lambeth_type7_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) + tm_shape(Archaeological_Priority_Areas)+tm_borders()+
+tm_layout("type 7 :sun<92, rain>48.2, frost>5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+Archaeological8 <-  tm_shape(lambeth_type8_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) + tm_shape(Archaeological_Priority_Areas)+tm_borders()+
+tm_layout("type 8: sun>174.9, rain>48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+Archaeological_legend <-  tm_shape(lambeth_type8_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)) 
++ tm_shape(Archaeological_Priority_Areas)+tm_borders()
++ tm_layout("type 8: sun>174.9, rain>48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4,
+          legend.only = TRUE)
+
+
+grid.newpage()
+pushViewport(viewport(layout=grid.layout(2,5)))
+print(Archaeological1, vp = viewport(layout.pos.col=1, layout.pos.row=1))
+print(Archaeological2, vp = viewport(layout.pos.col=2, layout.pos.row=1))
+print(Archaeological3, vp = viewport(layout.pos.col=3, layout.pos.row=1))
+print(Archaeological4, vp = viewport(layout.pos.col=4, layout.pos.row=1))
+print(Archaeological_legend, vp = viewport(layout.pos.col=5, layout.pos.row=1))
+print(Archaeological5, vp = viewport(layout.pos.col=1, layout.pos.row=2))
+print(Archaeological6, vp = viewport(layout.pos.col=2, layout.pos.row=2))
+print(Archaeological7, vp = viewport(layout.pos.col=3, layout.pos.row=2))
+print(Archaeological8, vp = viewport(layout.pos.col=4, layout.pos.row=2))
+
+
+```
+
+Next is the interplay of crime distribution with retails.
+```{r,eval=FALSE}
+retails <- opq (bbox =c(-0.1512312,51.41105,-0.07829259,51.50844))%>%
+  # different landuse
+  add_osm_feature(key = 'landuse',value='retail') %>% 
+osmdata_sf()
+
+retails <- as(retails$osm_polygons, 'Spatial')
+
+retails1<-tm_shape(lambeth_type1_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) 
++ tm_shape(retails)+tm_borders()+
+tm_layout("type 1:sun<92, rain<48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+retails2 <-  tm_shape(lambeth_type2_graph)
++tm_fill(col = 'prop',
+         breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf),
+         legend.show = FALSE) + tm_shape(retails)
++tm_borders()+
+tm_layout("type 2:92<sun<174.9, rain<48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+retails3 <-  tm_shape(lambeth_type3_graph)+
+  tm_fill(col = 'prop'
+          ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+          ,legend.show = FALSE) 
++ tm_shape(retails)+tm_borders()+
+tm_layout("type 3 :174.9<sun, rain<48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+retails4 <-  tm_shape(lambeth_type4_graph)
++tm_fill(col = 'prop',
+         breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf),
+         legend.show = FALSE) + 
+  tm_shape(retails)+tm_borders()+
+tm_layout("type 4 :sun<92, rain>48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+
+retails5 <-  tm_shape(lambeth_type5_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) 
++ tm_shape(retails)+tm_borders()+
+tm_layout("type 5 :sun<92, rain<48.2, frost>5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+
+retails6 <-  tm_shape(lambeth_type6_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) 
++ tm_shape(retails)+tm_borders()+
+tm_layout("type 6 :92<sun<174.9, rain>48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+
+retails7 <-  tm_shape(lambeth_type7_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) 
++ tm_shape(retails)+tm_borders()+
+tm_layout("type 7 :sun<92, rain>48.2, frost>5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+
+retails8 <-  tm_shape(lambeth_type8_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) + tm_shape(retails)
++tm_borders()+
+tm_layout("type 8: sun>174.9, rain>48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
+
+
+grid.newpage()
+pushViewport(viewport(layout=grid.layout(2,5)))
+print(retails1, vp = viewport(layout.pos.col=1, layout.pos.row=1))
+print(retails2, vp = viewport(layout.pos.col=2, layout.pos.row=1))
+print(retails3, vp = viewport(layout.pos.col=3, layout.pos.row=1))
+print(retails4, vp = viewport(layout.pos.col=4, layout.pos.row=1))
+print(Archaeological_legend, vp = viewport(layout.pos.col=5, layout.pos.row=1))
+print(retails5, vp = viewport(layout.pos.col=1, layout.pos.row=2))
+print(retails6, vp = viewport(layout.pos.col=2, layout.pos.row=2))
+print(retails7, vp = viewport(layout.pos.col=3, layout.pos.row=2))
+print(retails8, vp = viewport(layout.pos.col=4, layout.pos.row=2))
+
+```
+
+Next is filtering the numbers of bars in one square with grid method and display the distribution of bars on map.
+```{r,eval=FALSE}
+bar <- opq (bbox =c(-0.1512312,51.41105,-0.07829259,51.50844))%>%
+  # different landuse
+  add_osm_feature(key = 'amenity',value='bar') %>% 
+osmdata_sf()
+
+bar_poi <- as(bar$osm_points, 'Spatial')
+
+# convert the bars to polygon
+bar_ppp  <- as(bar_poi, "ppp")
+marks(bar_ppp)  <- NULL
+plot(bar_ppp, main=NULL, cols=rgb(0,0,0,.2), pch=20)
+Q_bar <- quadratcount(bar_ppp, nx= 10, ny=15)
+plot(bar_ppp, pch=20, cols="grey70", main=NULL)  # Plot points
+plot(Q_bar,add=TRUE)
+#transfer to dataframe and filter the frequency > 5.
+bar_df <- data.frame(Q_bar)
+bar_df[bar_df$Freq>5,]
+
+# label for the selected grid in the field of 
+# lambeth with the format 'id_number'
+id = c('1_7','2_7','3_25',"4_7","5_10","6_8","7_32")
+# 7
+coords1 <- cbind(c(-0.137,-0.137,-0.129,-0.129), c(51.461,51.467,51.467,51.461))
+spy1 <- coords2Polygons(coords1, ID = "poly1_7")
+proj4string(spy1)<-proj4string(bar_poi)
+            
+# 7 
+coords2 <- cbind(c(-0.122,-0.122,-0.115,-0.115), c(51.461,51.467,51.467,51.461))
+spy2 <- coords2Polygons(coords2, ID = "poly2_7")
+proj4string(spy2)<-proj4string(bar_poi)
+
+# 25
+coords3 <- cbind(c(-0.115,-0.115,-0.108,-0.108), c(51.502,51.508,51.508,51.502))
+spy3 <- coords2Polygons(coords3, ID = "poly3_25")
+proj4string(spy3)<-proj4string(bar_poi)
+
+# 7
+coords4 <- cbind(c(-0.115,-0.115,-0.108,-0.108), c(51.461,51.467,51.467,51.461))
+spy4 <- coords2Polygons(coords4, ID = "pl4_7")
+proj4string(spy4)<-proj4string(bar_poi)
+
+# 10
+coords5 <- cbind(c(-0.108,-0.108,-0.1,-0.1)
+                 , c(51.449,51.455,51.455,51.449))
+spy5 <- coords2Polygons(coords5, ID = "poly5_10")
+proj4string(spy5)<-proj4string(bar_poi)
+
+# 8
+coords6 <- cbind(c(-0.1,-0.1,-0.093,-0.093)
+                 , c(51.443,51.449,51.449,51.443))
+spy6 <- coords2Polygons(coords6, ID = "poly6_8")
+proj4string(spy6)<-proj4string(bar_poi)
+
+# 32
+coords7 <- cbind(c(-0.0858,-0.0858,-0.0785,-0.0785), c(51.419,51.425,51.425,51.419))
+spy7 <- coords2Polygons(coords7, ID = "poly7_32")
+proj4string(spy7)<-proj4string(bar_poi)
+
+# convert the bar grids to spatial polygons
+bar_polyall = list(spy1,spy2,spy3,spy4,spy5,spy6,spy7)
+joined_barpoly = SpatialPolygons(lapply(bar_polyall, function(x){x@polygons[[1]]}))
+joined_barpoly = SpatialPolygonsDataFrame(Sr=joined_barpoly, data=data.frame(i=id),FALSE)
+
+# draw the bar polygons on maps
+bar1<-tm_shape(lambeth_type1_graph)
++tm_fill(col = 'prop',
+         breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf),
+         legend.show = FALSE) 
++  tm_layout("type 1:sun<92, rain<48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
++ tm_shape(joined_barpoly)+tm_borders()
++tm_text('i',just='center', size = 0.5)
+
+
+bar2 <-  tm_shape(lambeth_type2_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) +
+tm_layout("type 2:92<sun<174.9, rain<48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
++ tm_shape(joined_barpoly)+tm_borders()
++tm_text('i',just='center', size = 0.5)
+
+
+bar3 <-  tm_shape(lambeth_type3_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) +
+tm_layout("type 3 :174.9<sun, rain<48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
++ tm_shape(joined_barpoly)+tm_borders()
++tm_text('i',just='center', size = 0.5)
+
+
+bar4 <-  tm_shape(lambeth_type4_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) +
+tm_layout("type 4 :sun<92, rain>48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
++ tm_shape(joined_barpoly)
++tm_borders()
++tm_text('i',just='center', size = 0.5)
+
+
+
+bar5 <-  tm_shape(lambeth_type5_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) +
+tm_layout("type 5 :sun<92, rain<48.2, frost>5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
++ tm_shape(joined_barpoly)
++tm_borders()
++tm_text('i',just='center', size = 0.5)
+
+
+
+bar6 <-  tm_shape(lambeth_type6_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) +
+tm_layout("type 6 :92<sun<174.9, rain>48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
++ tm_shape(joined_barpoly)
++tm_borders()
++tm_text('i',just='center', size = 0.5)
+
+
+
+bar7 <-  tm_shape(lambeth_type7_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) +
+tm_layout("type 7 :sun<92, rain>48.2, frost>5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
++ tm_shape(joined_barpoly)
++tm_borders()
++tm_text('i',just='center', size = 0.5)
+
+
+
+bar8 <-  tm_shape(lambeth_type8_graph)
++tm_fill(col = 'prop'
+         ,breaks = c(0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,Inf)
+         ,legend.show = FALSE) +
+tm_layout("type 8: sun>174.9, rain>48.2, frost<5",
+          legend.title.size = 0.3,
+          legend.text.size = 0.4,
+          legend.position = c("right",'top'),
+          legend.bg.color =  "#00000000",
+          legend.bg.alpha = 1,
+          legend.width = 0.4)
++ tm_shape(joined_barpoly)
++tm_borders()
++tm_text('i',just='center', size = 0.5)
+
+# arrange on one graph
+grid.newpage()
+pushViewport(viewport(layout=grid.layout(2,5)))
+print(bar1, vp = viewport(layout.pos.col=1, layout.pos.row=1))
+print(bar2, vp = viewport(layout.pos.col=2, layout.pos.row=1))
+print(bar3, vp = viewport(layout.pos.col=3, layout.pos.row=1))
+print(bar4, vp = viewport(layout.pos.col=4, layout.pos.row=1))
+print(Archaeological_legend, vp = viewport(layout.pos.col=5, layout.pos.row=1))
+print(bar5, vp = viewport(layout.pos.col=1, layout.pos.row=2))
+print(bar6, vp = viewport(layout.pos.col=2, layout.pos.row=2))
+print(bar7, vp = viewport(layout.pos.col=3, layout.pos.row=2))
+print(bar8, vp = viewport(layout.pos.col=4, layout.pos.row=2))
+```
+
+---------------------------
+point pattern analysis--bar
+It includes two tests, one is the monte-carlo test to check the significance of clustering, another one is the dclf.test to check the distance of two different patterns.
+
+## for type1 and bar
+```{r,eval=FALSE}
+# extra the points of different types
+point_ana_1<-location_weather[location_weather$type=="type1",]
+[,c('Longitude','Latitude')]
+point_ana_1['poi_attr']<-'crime'
+
+point_ana_2<-location_weather[location_weather$type=="type2",]
+[,c('Longitude','Latitude')]
+point_ana_2['poi_attr']<-'crime'
+
+point_ana_3<-location_weather[location_weather$type=="type3",]
+[,c('Longitude','Latitude')]
+point_ana_3['poi_attr']<-'crime'
+
+point_ana_4<-location_weather[location_weather$type=="type4",]
+[,c('Longitude','Latitude')]
+point_ana_4['poi_attr']<-'crime'
+
+point_ana_5<-location_weather[location_weather$type=="type5",]
+[,c('Longitude','Latitude')]
+point_ana_5['poi_attr']<-'crime'
+
+point_ana_6<-location_weather[location_weather$type=="type6",]
+[,c('Longitude','Latitude')]
+point_ana_6['poi_attr']<-'crime'
+
+point_ana_9<-location_weather[location_weather$type=="type9",]
+[,c('Longitude','Latitude')]
+point_ana_9['poi_attr']<-'crime'
+
+point_ana_10<-location_weather[location_weather$type=="type10",]
+[,c('Longitude','Latitude')]
+point_ana_10['poi_attr']<-'crime'
+
+
+# extract the coordinates of bars
+bar_coors<-data.frame( bar_poi@coords)
+names(bar_coors)<-c('Longitude','Latitude')
+bar_coors['poi_attr'] <- 'bar'
+
+# get the minimum and maximum coordinates for weather data 
+# and use it as window to filter the bar's location.
+max(location_weather$Longitude)
+min(location_weather$Longitude)
+max(location_weather$Latitude)
+min(location_weather$Latitude)
+
+bar_coors<- bar_coors %>%
+  filter(Longitude<-0.078444&Longitude>-0.150096&
+           Latitude<51.50738&Latitude>51.4124)
+
+
+# type 1 distance
+bar_coors_ppp<-ppp(bar_coors$Longitude,bar_coors$Latitude
+                   ,window = owin(c(-0.150096,-0.078444)
+                                  ,c(51.4124,51.50738)))
+# add a random number to decrease the repeated records
+# set seed as 123 for all types to make sure stable results
+
+set.seed(123)
+rn_lon = floor(runif(length(point_ana_1$Longitude), min=0, max=10))*0.00000001
+rn_lat = floor(runif(length(point_ana_1$Longitude),
+                     min=0, max=10))*0.000001
+bar_poi_1<-point_ana_1
+# add the random number
+bar_poi_1$Longitude<- bar_poi_1$Longitude +rn_lon
+bar_poi_1$Latitude<- bar_poi_1$Latitude +rn_lat
+# make it into a window
+bar_ppp_1<-ppp(bar_poi_1$Longitude,bar_poi_1$Latitude,
+               window = owin(c(-0.150096,-0.078444),
+                             c(51.4124,51.50738)))
+# calculate the distance
+bar_dis_1 <- mean(nncross(bar_ppp_1,bar_coors_ppp)$dist)
+
+# hypothese test 
+bar_crime_poi<-rbind(bar_coors,bar_poi_1)
+
+# merge the crime data and bar data
+bar_crime_ana <- ppp(bar_crime_poi$Longitude,
+                     bar_crime_poi$Latitude,
+                     marks = factor(bar_crime_poi$poi_attr),
+                     window = owin(c(-0.150096,-0.078444),c(51.4124,51.50738)))
+single_L_bar_1 <- Lcross(bar_crime_ana,i='crime',j='bar',
+                         correction='border')
+# monte-carlo test (default simulate 99 times)
+clenv.bar_1 <- envelope(bar_crime_ana,Lcross,i='crime',j='bar',
+                        correction='border')
+# plot the results
+plot(single_L_bar_1)
+plot(clenv.bar_1)
+# records the dclf results
+bar_test_1<-dclf.test(bar_crime_ana,Lcross,i='crime',j='bar',
+                      alternative = 'greater',
+                      correction='border',verbose=FALSE)
+```
+
+## for type2 and bar
+```{r,eval=FALSE}
+# type 2 distance
+set.seed(123)
+rn_lon = floor(runif(length(point_ana_2$Longitude), min=0, max=10))*0.00000001
+rn_lat = floor(runif(length(point_ana_2$Longitude)
+                     , min=0, max=10))*0.000001
+bar_poi_2<-point_ana_2
+
+bar_poi_2$Longitude<- bar_poi_2$Longitude +rn_lon
+bar_poi_2$Latitude<- bar_poi_2$Latitude +rn_lat
+
+bar_ppp_2<-ppp(bar_poi_2$Longitude,bar_poi_2$Latitude,
+               window = owin(c(-0.150096,-0.078444),
+                             c(51.4124,51.50738)))
+
+bar_dis_2 <- mean(nncross(bar_ppp_2,bar_coors_ppp)$dist)
+
+# hypo
+bar_crime_poi_2<-rbind(bar_coors,bar_poi_2)
+
+bar_crime_ana_2 <- ppp(bar_crime_poi_2$Longitude,
+                       bar_crime_poi_2$Latitude,
+                       marks = factor(bar_crime_poi_2$poi_attr),
+                       window = owin(c(-0.150096,-0.078444),c(51.4124,51.50738)))
+single_L_bar_2 <- Lcross(bar_crime_ana_2,i='crime',j='bar',
+                         correction='border')
+
+clenv.bar_2 <- envelope(bar_crime_ana_2,Lcross,i='crime',j='bar',
+                        correction='border')
+plot(single_L_bar_2)
+plot(clenv.bar_2)
+
+bar_test_2<-dclf.test(bar_crime_ana_2,Lcross,i='crime',j='bar',
+                      alternative = 'greater',
+                      correction='border',verbose=FALSE)
+
+```
+
+## for type3 and bar
+```{r,eval=FALSE}
+
+# type 3 distance
+set.seed(123)
+rn_lon = floor(runif(length(point_ana_3$Longitude), min=0, max=10))*0.00000001
+rn_lat = floor(runif(length(point_ana_3$Longitude)
+                     , min=0, max=10))*0.000001
+bar_poi_3<-point_ana_3
+
+bar_poi_3$Longitude<- bar_poi_3$Longitude +rn_lon
+bar_poi_3$Latitude<- bar_poi_3$Latitude +rn_lat
+
+bar_ppp_3<-ppp(bar_poi_3$Longitude,bar_poi_3$Latitude
+               ,window = owin(c(-0.150096,-0.078444),c(51.4124,51.50738)))
+
+bar_dis_3 <- mean(nncross(bar_ppp_3,bar_coors_ppp)$dist)
+
+# hypo
+bar_crime_poi_3<-rbind(bar_coors,bar_poi_3)
+
+bar_crime_ana_3 <- ppp(bar_crime_poi_3$Longitude,
+                       bar_crime_poi_3$Latitude,
+                       marks = factor(bar_crime_poi_3$poi_attr),
+                       window = owin(c(-0.150096,-0.078444),c(51.4124,51.50738)))
+single_L_bar_3 <- Lcross(bar_crime_ana_3,i='crime',j='bar',
+                         correction='border')
+
+clenv.bar_3 <- envelope(bar_crime_ana_3,Lcross,i='crime',j='bar',
+                        correction='border')
+plot(single_L_bar_3)
+plot(clenv.bar_3)
+
+bar_test_3<-dclf.test(bar_crime_ana_3,Lcross,i='crime',j='bar',
+                      alternative = 'greater',
+                      correction='border',
+                      verbose=FALSE)
+
+
+```
+
+## for type4 and bar
+```{r,eval=FALSE}
+
+# type 4 distance
+set.seed(123)
+rn_lon = floor(runif(length(point_ana_4$Longitude), min=0, max=10))*0.00000001
+rn_lat = floor(runif(length(point_ana_4$Longitude), 
+                     min=0, max=10))*0.000001
+bar_poi_4<-point_ana_4
+
+bar_poi_4$Longitude<- bar_poi_4$Longitude +rn_lon
+bar_poi_4$Latitude<- bar_poi_4$Latitude +rn_lat
+
+bar_ppp_4<-ppp(bar_poi_4$Longitude,bar_poi_4$Latitude,
+               window = owin(c(-0.150096,-0.078444)
+                             ,c(51.4124,51.50738)))
+
+bar_dis_4 <- mean(nncross(bar_ppp_4,bar_coors_ppp)$dist)
+
+# hypo
+bar_crime_poi_4<-rbind(bar_coors,bar_poi_4)
+
+bar_crime_ana_4 <- ppp(bar_crime_poi_4$Longitude,
+                       bar_crime_poi_4$Latitude,
+                       marks = factor(bar_crime_poi_4$poi_attr),
+                       window = owin(c(-0.150096,-0.078444),
+                                     c(51.4124,51.50738)))
+single_L_bar_4 <- Lcross(bar_crime_ana_4,i='crime',j='bar'
+                         ,correction='border')
+
+clenv.bar_4 <- envelope(bar_crime_ana_4,Lcross,i='crime',j='bar'
+                        ,correction='border')
+plot(single_L_bar_4)
+plot(clenv.bar_4)
+
+bar_test_4<-dclf.test(bar_crime_ana_4,Lcross,i='crime',j='bar',
+                      alternative = 'greater',
+                      correction='border',
+                      verbose=FALSE)
+
+```
+
+## for type5 and bar
+```{r,eval=FALSE}
+
+# type 5 distance
+set.seed(123)
+rn_lon = floor(runif(length(point_ana_5$Longitude), min=0, max=10))*0.00000001
+rn_lat = floor(runif(length(point_ana_5$Longitude), 
+                     min=0, max=10))*0.000001
+bar_poi_5<-point_ana_5
+
+bar_poi_5$Longitude<- bar_poi_5$Longitude +rn_lon
+bar_poi_5$Latitude<- bar_poi_5$Latitude +rn_lat
+
+bar_ppp_5<-ppp(bar_poi_5$Longitude,bar_poi_5$Latitude,
+               window = owin(c(-0.150096,-0.078444),
+                             c(51.4124,51.50738)))
+
+bar_dis_5 <- mean(nncross(bar_ppp_5,bar_coors_ppp)$dist)
+
+# hypo
+bar_crime_poi_5<-rbind(bar_coors,bar_poi_5)
+
+bar_crime_ana_5 <- ppp(bar_crime_poi_5$Longitude,bar_crime_poi_5$Latitude,
+                       marks = factor(bar_crime_poi_5$poi_attr),
+                       window = owin(c(-0.150096,-0.078444),
+                                     c(51.4124,51.50738)))
+single_L_bar_5 <- Lcross(bar_crime_ana_5,i='crime',j='bar',
+                         correction='border')
+
+clenv.bar_5 <- envelope(bar_crime_ana_5,Lcross,i='crime',j='bar',
+                        correction='border')
+plot(single_L_bar_5)
+plot(clenv.bar_5)
+
+bar_test_5<-dclf.test(bar_crime_ana_5,Lcross,i='crime',j='bar',
+                      alternative = 'greater',
+                      correction='border',
+                      verbose=FALSE)
+
+```
+
+## for type6 and bar
+```{r,eval=FALSE}
+
+# type 6 distance
+set.seed(123)
+rn_lon = floor(runif(length(point_ana_6$Longitude), min=0, max=10))*0.00000001
+rn_lat = floor(runif(length(point_ana_6$Longitude), 
+                     min=0, max=10))*0.000001
+bar_poi_6<-point_ana_6
+
+bar_poi_6$Longitude<- bar_poi_6$Longitude +rn_lon
+bar_poi_6$Latitude<- bar_poi_6$Latitude +rn_lat
+
+bar_ppp_6<-ppp(bar_poi_6$Longitude,bar_poi_6$Latitude,
+               window = owin(c(-0.150096,-0.078444),
+                             c(51.4124,51.50738)))
+
+bar_dis_6 <- mean(nncross(bar_ppp_6,bar_coors_ppp)$dist)
+
+# hypo
+bar_crime_poi_6<-rbind(bar_coors,bar_poi_6)
+
+bar_crime_ana_6 <- ppp(bar_crime_poi_6$Longitude,
+                       bar_crime_poi_6$Latitude,
+                       marks = factor(bar_crime_poi_6$poi_attr),
+                       window = owin(c(-0.150096,-0.078444),
+                                     c(51.4124,51.50738)))
+single_L_bar_6 <- Lcross(bar_crime_ana_6,i='crime',j='bar',
+                         correction='border')
+
+clenv.bar_6 <- envelope(bar_crime_ana_6,Lcross,i='crime',j='bar',
+                        correction='border')
+plot(single_L_bar_6)
+plot(clenv.bar_6)
+
+bar_test_6<-dclf.test(bar_crime_ana_6,Lcross,i='crime',j='bar',
+                      alternative = 'greater',
+                      correction='border',
+                      verbose=FALSE)
+
+```
+
+## for type9 and bar
+```{r,eval=FALSE}
+
+# type 9 distance
+set.seed(123)
+rn_lon = floor(runif(length(point_ana_9$Longitude), min=0, max=10))*0.00000001
+rn_lat = floor(runif(length(point_ana_9$Longitude), 
+                     min=0, max=10))*0.000001
+bar_poi_9<-point_ana_9
+
+bar_poi_9$Longitude<- bar_poi_9$Longitude +rn_lon
+bar_poi_9$Latitude<- bar_poi_9$Latitude +rn_lat
+
+bar_ppp_9<-ppp(bar_poi_9$Longitude,bar_poi_9$Latitude,
+               window = owin(c(-0.150096,-0.078444),
+                             c(51.4124,51.50738)))
+
+bar_dis_9 <- mean(nncross(bar_ppp_9,bar_coors_ppp)$dist)
+
+# hypo
+bar_crime_poi_9<-rbind(bar_coors,bar_poi_9)
+
+bar_crime_ana_9 <- ppp(bar_crime_poi_9$Longitude,bar_crime_poi_9$Latitude,
+                       marks = factor(bar_crime_poi_9$poi_attr),
+                       window = owin(c(-0.150096,-0.078444),
+                                     c(51.4124,51.50738)))
+single_L_bar_9 <- Lcross(bar_crime_ana_9,i='crime',j='bar',
+                         correction='border')
+
+clenv.bar_9 <- envelope(bar_crime_ana_9,Lcross,i='crime',j='bar',
+                        correction='border')
+
+clenv.bar_7 <- envelope(bar_crime_ana_9,Lcross,i='crime',j='bar',
+                        correction='border')
+
+plot(single_L_bar_9)
+plot(clenv.bar_7)
+
+bar_test_9<-dclf.test(bar_crime_ana_9,Lcross,i='crime',j='bar',
+                      alternative = 'greater',
+                      correction='border',
+                      verbose=FALSE)
+```
+
+## for type10 and bar
+```{r,eval=FALSE}
+# type 10 distance
+set.seed(123)
+rn_lon = floor(runif(length(point_ana_10$Longitude), min=0, max=10))*0.00000001
+rn_lat = floor(runif(length(point_ana_10$Longitude), min=0, max=10))*0.000001
+bar_poi_10<-point_ana_10
+
+bar_poi_10$Longitude<- bar_poi_10$Longitude +rn_lon
+bar_poi_10$Latitude<- bar_poi_10$Latitude +rn_lat
+
+bar_ppp_10<-ppp(bar_poi_10$Longitude,bar_poi_10$Latitude,
+                window = owin(c(-0.150096,-0.078444),
+                              c(51.4124,51.50738)))
+
+bar_dis_10 <- mean(nncross(bar_ppp_10,bar_coors_ppp)$dist)
+
+# hypo
+bar_crime_poi_10<-rbind(bar_coors,bar_poi_10)
+
+bar_crime_ana_10 <- ppp(bar_crime_poi_10$Longitude,
+                        bar_crime_poi_10$Latitude,
+                        marks = factor(bar_crime_poi_10$poi_attr),
+                        window = owin(c(-0.150096,-0.078444),
+                                      c(51.4124,51.50738)))
+single_L_bar_10 <- Lcross(bar_crime_ana_10,i='crime',j='bar',
+                          correction='border')
+
+
+clenv.bar_8 <- envelope(bar_crime_ana_10,Lcross,i='crime',j='bar',
+                        correction='border')
+
+plot(single_L_bar_10)
+plot(clenv.bar_8)
+
+bar_test_10<-dclf.test(bar_crime_ana_10,Lcross,i='crime',j='bar',
+                       alternative = 'greater',
+                       correction='border',
+                       verbose=FALSE)
+
+```
+
