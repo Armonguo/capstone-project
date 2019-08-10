@@ -11,5 +11,6 @@ This repository serves for my finnal capstone project.
 Two proposals in MY400 and the titles of them are:
 
 proposal 1: Analysis of Crime in the Context of Different Weather and Spatial Conditions
+
 proposal 2: Rebel city and its fight back -- a case study of correlation between city spatial capitals and crime
 
